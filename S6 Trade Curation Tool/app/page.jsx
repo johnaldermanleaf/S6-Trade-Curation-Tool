@@ -1,5 +1,9 @@
 'use client'
 import { useState, useRef, useEffect } from 'react'
+import {
+  buildCsvRows, toCsvText, csvFilename, productLinksForItem,
+  WALL_ART_TYPES, PILLOW_TYPES, ALL_PRODUCT_TYPES, PRODUCT_TYPE_SLUGS, DEFAULT_TYPE_SLUGS,
+} from '../lib/handoff'
 
 const SAMPLE_BRIEF = `Project Name: The Savannah Grand Hotel
 Project Type: Hotel
@@ -11,58 +15,10 @@ Gallery Wall: Yes
 Target Pieces: 80
 Notes: Looking for a warm, welcoming feel that reflects Savannah's coastal charm. Should feel elevated but approachable.`
 
-// ── Product types the collection can be offered in ──────────────────────────
-// Every design can be manufactured as any format on Society6, so "product type"
-// is a presentation/export choice, not a catalog filter. Slugs match stamp.py's
-// Jordan-approved TYPE_SLUGS; the S6 URL is /products/<design_key>_<slug>.
-// `slug` = S6 URL suffix; `type` = the exact product_type value stored in the
-// catalog (what the recommender filters on). Every design has ONE native type,
-// so the selector filters the pool by these types rather than inventing
-// cross-format URLs (which aren't guaranteed to exist on Society6).
-const WALL_ART_TYPES = [
-  { label: 'Art Print',           slug: 'art-print',           type: 'Art Print' },
-  { label: 'Framed Art Print',    slug: 'framed-art-print',    type: 'Framed Art Print' },
-  { label: 'Canvas Print',        slug: 'canvas-print',        type: 'Canvas Print' },
-  { label: 'Framed Canvas Print', slug: 'framed-canvas-print', type: 'Framed Canvas Print' },
-  { label: 'Metal Print',         slug: 'metal-print',         type: 'Metal Print' },
-  { label: 'Poster',              slug: 'poster',              type: 'Poster' },
-  { label: 'Framed Poster',       slug: 'framed-poster',       type: 'Framed Poster' },
-  { label: 'Mini Art Print',      slug: 'mini-art-print',      type: 'Mini Art Print' },
-  { label: 'Wood Wall Art',       slug: 'wood-wall-art',       type: 'Wood Wall Art' },
-  { label: 'Wall Tapestry',       slug: 'wall-tapestry',       type: 'Wall Tapestry' },
-]
-const PILLOW_TYPES = [
-  { label: 'Throw Pillow',                slug: 'throw-pillow',       type: 'Throw Pillow' },
-  { label: 'Rectangular (Lumbar) Pillow', slug: 'rectangular-pillow', type: 'Rectangular Pillow' },
-  { label: 'Shower Curtain',              slug: 'shower-curtain',     type: 'Shower Curtain' },
-]
-const ALL_PRODUCT_TYPES = [...WALL_ART_TYPES, ...PILLOW_TYPES]
-const PRODUCT_TYPE_SLUGS = ALL_PRODUCT_TYPES.map(t => t.slug)
-// Default: all wall art EXCEPT Mini Art Print (small-format, rarely wanted for
-// statement walls); pillows off. Keeps the old "exclude mini" default behavior.
-const DEFAULT_TYPE_SLUGS = WALL_ART_TYPES.filter(t => t.slug !== 'mini-art-print').map(t => t.slug)
-
-// Preferred display order for format links (wall art first, then pillows).
-const TYPE_ORDER = new Map(ALL_PRODUCT_TYPES.map((t, i) => [t.type, i]))
 
 // Links come from the design's REAL available formats (from design_formats via
 // the API), already filtered to the selected types. Each links to a genuine
 // product page. Falls back to the item's native URL if availability is missing.
-function productLinksForItem(item) {
-  if (!item) return []
-  const fmts = item.available_formats
-  if (Array.isArray(fmts) && fmts.length) {
-    return [...fmts]
-      .sort((a, b) => (TYPE_ORDER.get(a.type) ?? 99) - (TYPE_ORDER.get(b.type) ?? 99))
-      .filter(f => f && f.url)
-      .map(f => ({ label: f.type, slug: f.type, url: f.url, image: f.image_url }))
-  }
-  let url = item.product_url || ''
-  if (url.startsWith('/')) url = 'https://society6.com' + url
-  if (!url) return []
-  return [{ label: item.product_type || item.source_collection || 'View on Society6', slug: 'native', url, image: item.image_url }]
-}
-
 function ArtworkCard({ item, size = 'md', pinned = false, selected = true, onToggle = null, onPinToggle = null, productLinks = null }) {
   const [imgError, setImgError] = useState(false)
   const imgSize = size === 'sm' ? 'h-32' : 'h-48'
@@ -237,6 +193,36 @@ export default function HomePage() {
   const [shareLoading, setShareLoading] = useState(false)
   const [shareResult, setShareResult] = useState(null)
   const [shareError, setShareError] = useState(null)
+  // Trade-app handoff ("Open in Trade Curation Tool" round trip)
+  const [tradeBriefId, setTradeBriefId] = useState('')
+  const [briefLoading, setBriefLoading] = useState(false)
+  const [briefLoadError, setBriefLoadError] = useState(null)
+  const [handoffLoading, setHandoffLoading] = useState(false)
+  const [handoffResult, setHandoffResult] = useState(null)
+  const [handoffError, setHandoffError] = useState(null)
+
+  // Inbound from the trade app: /?briefId=123 pulls the brief server-side and
+  // prefills the form. The brief text itself never travels in the URL.
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get('briefId')
+    if (!id) return
+    setTradeBriefId(id)
+    setBriefLoading(true)
+    fetch(`/api/trade-brief/${encodeURIComponent(id)}`)
+      .then(async r => {
+        const data = await r.json()
+        if (!r.ok) throw new Error(data.error || 'Could not load the brief')
+        return data
+      })
+      .then(data => {
+        setBriefText(data.briefText || '')
+        if (data.moodboardUrl) setMoodboardUrl(data.moodboardUrl)
+        if (data.projectName) setDeckProjectName(data.projectName)
+        setBriefLoadError(null)
+      })
+      .catch(e => setBriefLoadError(e.message || 'Could not load the brief'))
+      .finally(() => setBriefLoading(false))
+  }, [])
   const [activeTab, setActiveTab] = useState('primary')
   const fileInputRef = useRef(null)
 
@@ -472,48 +458,30 @@ export default function HomePage() {
     setPinnedUrls(u => (u || []).filter(x => !toRemove.has(x)))
   }
 
-  function downloadCsv() {
-    if (!results) return
-    const toAbsolute = (u) => !u ? '' : (u.startsWith('/') ? 'https://society6.com' + u : u)
-    const rows = []
-    const push = (item, placement) => {
-      const base = {
-        title: item.title || '',
-        artist: item.artist_name || '',
-        style: item.vision_style || '',
-        palette: item.vision_palette || '',
-        placement,
-        reason: item.reason || '',
-      }
-      const rowFor = (productType, productUrl, img) => {
-        const imageUrl = toAbsolute(img)
-        rows.push({
-          ...base,
-          product_type: productType,
-          product_url: productUrl,
-          image_url: imageUrl,
-          thumbnail: imageUrl ? `=IMAGE("${imageUrl}")` : '',
-        })
-      }
-      // One row per real available product type, each with its own product image;
-      // fall back to the item's own URL if availability is missing.
-      const links = productLinksForItem(item, selectedTypes)
-      if (links.length === 0) rowFor('', toAbsolute(item.product_url), item.image_url)
-      else for (const l of links) rowFor(l.label, l.url, l.image || item.image_url)
+  // Collect the pieces the rep marked "In deck", in placement order.
+  // Shared by Download CSV and Send to Collection so both describe the same set.
+  function selectedPayload() {
+    if (!results) return null
+    const keep = (arr) => (arr || []).filter(i => selectedItems.has(i.product_url))
+    return {
+      projectName: deckProjectName || results.brief?.projectName || '',
+      primary: keep(results.primary),
+      accent: keep(results.accent),
+      galleryWallSets: (results.galleryWallSets || []).map(set => ({
+        setNumber: set.setNumber,
+        theme: set.theme || '',
+        items: keep(set.items),
+      })),
     }
-    ;(results.primary || []).filter(i => selectedItems.has(i.product_url)).forEach(i => push(i, 'Primary'))
-    ;(results.accent || []).filter(i => selectedItems.has(i.product_url)).forEach(i => push(i, 'Accent'))
-    ;(results.galleryWallSets || []).forEach(set => {
-      (set.items || []).filter(i => selectedItems.has(i.product_url)).forEach(i => push(i, `Gallery Wall #${set.setNumber}`))
-    })
+  }
+
+  function downloadCsv() {
+    const payload = selectedPayload()
+    if (!payload) return
+    const rows = buildCsvRows(payload)
     if (rows.length === 0) { setSlidesError('Nothing selected to export. Select at least one item above.'); return }
-    const headers = ['title', 'product_type', 'product_url', 'image_url', 'thumbnail', 'artist', 'style', 'palette', 'placement', 'reason']
-    const escape = (v) => { const s = String(v ?? ''); return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s }
-    const csv = [headers.join(','), ...rows.map(r => headers.map(h => escape(r[h])).join(','))].join('\n')
-    const safeName = (deckProjectName || results.brief?.projectName || 'S6-Curation')
-      .replace(/[^a-z0-9-]+/gi, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'S6-Curation'
-    const filename = `${safeName}-${new Date().toISOString().slice(0, 10)}.csv`
-    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' })
+    const filename = csvFilename(payload.projectName)
+    const blob = new Blob(['\ufeff' + toCsvText(rows)], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url; a.download = filename
@@ -521,6 +489,29 @@ export default function HomePage() {
     URL.revokeObjectURL(url)
     setSlidesError(null)
     setSlidesResult({ filename })
+  }
+
+  // Persist the selection and hand the trade app a URL to fetch. Nothing is
+  // pushed into the trade app from here — it pulls, on the rep's click there.
+  async function sendToCollection() {
+    const payload = selectedPayload()
+    if (!payload) return
+    if (buildCsvRows(payload).length === 0) { setHandoffError('Nothing selected to send. Select at least one piece above.'); return }
+    setHandoffLoading(true); setHandoffError(null); setHandoffResult(null)
+    try {
+      const res = await fetch('/api/builds', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, briefRef: tradeBriefId || '' }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed to send')
+      setHandoffResult(data)
+    } catch (e) {
+      setHandoffError(e.message || 'Failed to send')
+    } finally {
+      setHandoffLoading(false)
+    }
   }
 
   async function handleGenerateSlides() {
@@ -627,6 +618,22 @@ export default function HomePage() {
       <div className="mb-10">
         <h1 className="text-2xl font-bold text-gray-900 mb-1">New Curation Request</h1>
         <p className="text-gray-500 text-sm mb-6">Paste a client brief, optionally add a moodboard, and generate a curated set.</p>
+
+        {briefLoading && (
+          <div className="mb-4 bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-800">
+            Loading brief from the trade app…
+          </div>
+        )}
+        {briefLoadError && (
+          <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800">
+            {briefLoadError} — paste the brief below instead.
+          </div>
+        )}
+        {tradeBriefId && !briefLoading && !briefLoadError && (
+          <div className="mb-4 bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-800">
+            Brief <code className="font-mono">{tradeBriefId}</code> loaded from the trade app. Adjust anything below, then generate.
+          </div>
+        )}
 
         <form onSubmit={handleGenerate} className="space-y-4">
 
@@ -961,9 +968,35 @@ export default function HomePage() {
             </div>
             <p className="text-sm text-gray-500 mb-4">Downloads a CSV of the pieces marked <strong>In deck</strong> — one row per product, with image, link, and details. Open in Google Sheets for thumbnail previews. Use the select control on each card to include or exclude pieces.</p>
 
-            <button onClick={downloadCsv} className="btn-primary" title="Download CSV of selected items. Open in Google Sheets for thumbnail previews.">
-              Download CSV
-            </button>
+            <div className="flex flex-wrap items-center gap-3">
+              <button onClick={downloadCsv} className="btn-primary" title="Download CSV of selected items. Open in Google Sheets for thumbnail previews.">
+                Download CSV
+              </button>
+              <button
+                onClick={sendToCollection}
+                disabled={handoffLoading}
+                className="btn-primary disabled:opacity-50"
+                title="Save this selection and hand it to the trade app — no file to download or upload."
+              >
+                {handoffLoading ? 'Sending…' : 'Send to Collection'}
+              </button>
+            </div>
+
+            {handoffError && (
+              <div className="mt-4 bg-red-50 border border-red-200 rounded-lg p-4 text-sm text-red-700">{handoffError}</div>
+            )}
+
+            {handoffResult && (
+              <div className="mt-4 bg-green-50 border border-green-200 rounded-lg p-4">
+                <div className="text-sm font-medium text-green-800 mb-1">
+                  Sent — {handoffResult.designCount} pieces ({handoffResult.itemCount} rows)
+                </div>
+                <div className="text-sm text-green-700 mb-2">
+                  Build <code className="font-mono">{handoffResult.id}</code>. The trade app can pull it from:
+                </div>
+                <div className="text-xs font-mono break-all text-green-800">{handoffResult.csvUrl}</div>
+              </div>
+            )}
 
             {slidesResult && (
               <div className="mt-4 bg-green-50 border border-green-200 rounded-lg p-4">
