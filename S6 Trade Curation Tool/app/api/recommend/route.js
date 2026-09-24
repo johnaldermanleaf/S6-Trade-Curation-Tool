@@ -520,11 +520,15 @@ function mergeBriefs(primary, seed) {
 
 // ——— Route handler ——————————————————————————————————————————————————————————
 // Keep-warm endpoint. A scheduled Netlify function pings this every few minutes so
-// the container (and the expensive cold-start work — the pg pool + the Claude SDK
-// dynamic import) stays hot, which is what pushes a cold POST over the ~10s limit.
+// the container (and the Claude SDK dynamic import, the expensive part of a cold
+// start) stays hot, which is what pushes a cold POST over the ~10s limit.
+// NOTE (Sep 2026): the DB warm (`SELECT 1` on the pg pool) was deliberately REMOVED.
+// Pinging it every 5 minutes kept Neon from ever scaling to zero, which burned
+// compute 24/7 and exhausted the quota. Neon wakes in ~0.5–1s on the first real
+// query, and the client's 504 auto-retry covers the rare fully-cold miss.
+// `warmed.db` is kept in the response shape (always false) so existing checks parse.
 export async function GET() {
   const out = { ok: true, warmed: { db: false, sdk: false } };
-  try { await getPool().query('SELECT 1'); out.warmed.db = true; } catch (e) { out.dbError = e.message; }
   try { await import('@anthropic-ai/sdk'); out.warmed.sdk = true; } catch (e) { out.sdkError = e.message; }
   return NextResponse.json(out);
 }
