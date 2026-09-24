@@ -331,24 +331,28 @@ export default function HomePage() {
     // A cold-started serverless function can exceed Netlify's ~10s limit and return
     // a 504 (an HTML gateway page, not JSON). The next request hits a now-warm
     // function and succeeds, so we transparently retry timeout-style failures.
-    const MAX_ATTEMPTS = 3
+    // 5 attempts with growing gaps (1.5s, 3s, 4.5s, 6s): with Neon now allowed to
+    // scale to zero, a fully cold request (function cold start + DB wake) can need
+    // more headroom than the old 3x1.5s budget before a warm attempt lands.
+    const MAX_ATTEMPTS = 5
     const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+    const backoff = (attempt) => sleep(1500 * attempt)
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       let res
       try {
         res = await fetch('/api/recommend', options)
       } catch (e) {
-        if (attempt < MAX_ATTEMPTS) { await sleep(1500); continue }
+        if (attempt < MAX_ATTEMPTS) { await backoff(attempt); continue }
         throw new Error('Could not reach the recommendation service. Please try again.')
       }
       if ((res.status === 502 || res.status === 503 || res.status === 504) && attempt < MAX_ATTEMPTS) {
-        await sleep(1500); continue
+        await backoff(attempt); continue
       }
       const text = await res.text()
       let data
       try { data = JSON.parse(text) }
       catch {
-        if (attempt < MAX_ATTEMPTS) { await sleep(1500); continue }
+        if (attempt < MAX_ATTEMPTS) { await backoff(attempt); continue }
         throw new Error('The recommendation service timed out. Please try again.')
       }
       if (!res.ok) throw new Error(data.error || 'Unknown error')
