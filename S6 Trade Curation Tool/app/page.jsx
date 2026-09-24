@@ -21,11 +21,15 @@ Notes: Looking for a warm, welcoming feel that reflects Savannah's coastal charm
 // product page. Falls back to the item's native URL if availability is missing.
 function ArtworkCard({ item, size = 'md', pinned = false, selected = true, onToggle = null, onPinToggle = null, productLinks = null }) {
   const [imgError, setImgError] = useState(false)
+  // Hovering a format link previews THAT format's image in the card, so a rep
+  // can see e.g. the Wood Wall Art mockup without clicking through — the
+  // default thumbnail is always the first offered format's image otherwise.
+  const [hoverImage, setHoverImage] = useState(null)
   const imgSize = size === 'sm' ? 'h-32' : 'h-48'
   // Prefer the primary offered format's own image so the thumbnail matches the
   // product being linked (e.g. show the shower-curtain image, not the design's
   // native pillow image). Falls back to the design's image.
-  const thumb = (productLinks && productLinks[0] && productLinks[0].image) || item.image_url
+  const thumb = hoverImage || (productLinks && productLinks[0] && productLinks[0].image) || item.image_url
   return (
     <div className={`card group flex flex-col relative ${pinned ? 'ring-2 ring-blue-400' : ''} ${onToggle && !selected ? 'opacity-40' : ''}`}>
       {/* PIN control (top-left): keep this piece through a Refine */}
@@ -79,6 +83,8 @@ function ArtworkCard({ item, size = 'md', pinned = false, selected = true, onTog
                   rel="noopener noreferrer"
                   className="text-xs text-red-600 hover:text-red-800 font-medium"
                   title={`View ${pl.label} on Society6`}
+                  onMouseEnter={() => { if (pl.image) { setHoverImage(pl.image); setImgError(false) } }}
+                  onMouseLeave={() => setHoverImage(null)}
                 >
                   {pl.label}
                 </a>
