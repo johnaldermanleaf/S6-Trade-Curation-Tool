@@ -1,6 +1,11 @@
 [build]
   command = "npm run build"
   publish = ".next"
+  # Always build on push. Netlify's default "did anything change?" check runs a
+  # git diff against the base directory path, which mis-handles the space in
+  # "S6 Trade Curation Tool" and cancels every push-triggered deploy with
+  # "no content change". A non-zero exit here means "changes found, build".
+  ignore = "exit 1"
 
 [build.environment]
   NODE_VERSION = "20"
