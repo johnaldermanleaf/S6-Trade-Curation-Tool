@@ -195,8 +195,8 @@ export function clampMeta(s) {
 // ── Vision prompts (verbatim from lib/describe.js / describe-mockup.js) ──
 
 export const MODEL_ID = 'claude-haiku-4-5-20251001';
-export const PROMPT_VERSION_FLAT = 'desc-v3-text-r2';
-export const PROMPT_VERSION_MOCKUP = 'desc-v2-mockup-r2';
+export const PROMPT_VERSION_FLAT = 'desc-v3-text-r3';
+export const PROMPT_VERSION_MOCKUP = 'desc-v2-mockup-r3';
 export const COST_PER_INPUT_TOKEN = 0.00000025;
 export const COST_PER_OUTPUT_TOKEN = 0.00000125;
 
@@ -227,6 +227,7 @@ export function buildFlatPrompt(title) {
 'Stay strict about all other text: for any wording that is small, secondary, stylized, partially obscured, or that you cannot read with complete confidence, do NOT mention it, quote it, paraphrase it, or note that it exists. Never guess or approximate words. It is better to omit real text than to state text that is wrong or absent. Most artworks have no prominent lettering; describe those purely as art with no mention of text. ' +
 'Do NOT mention any product, format, or material (no print, frame, canvas, pillow, etc). ' +
 'MATERIAL RULE: if the artwork DEPICTS a material or texture (fur, woven fabric, knit, wool, velvet, embroidery, quilting, wood grain, leather, etc.), make unmistakable that it is part of the printed artwork, not the product: write it as a graphic or printed rendering (for example "a graphic zebra pattern evoking fur" or "a printed rendering of woven texture"). Never use wording that could imply the physical product is made of that material, or is soft, plush, or textured to the touch. This rule applies to the ARTWORK DESCRIPTION, the CONTEXT CLAUSE, and the META DESCRIPTION. ' +
+'DELIVERY RULE: a sentence may DESCRIBE what the artwork depicts (material words are fine there), but must never promise a physical or tactile experience the product delivers. Never write framings like "drawn to natural textures", "embracing natural materials", "celebrates tactile forms", "invites touch", "soft to the touch", the word "tactile", or "brings texture or softness into your room". Never use "tapestry" as a metaphor (such as "a tapestry of colors"). This rule also applies to the ARTWORK DESCRIPTION, the CONTEXT CLAUSE, and the META DESCRIPTION. ' +
 'Never use any form of these words anywhere in the description: stunning, beautiful, beauty, beautifully, vibrant, unique, perfect, perfection, perfectly, gorgeous. Never use the word design or designs - this is original artwork, not a template. Do NOT use em-dashes or en-dashes (the characters — or –); use periods or commas instead.\n\n' +
 '2. CONTEXT CLAUSE: One short phrase (under 15 words) naming where this artwork naturally belongs - a room, a mood, a moment. ' +
 'Start lowercase so it can follow the description (e.g. "at home in a calm bedroom or a quiet reading corner"). ' +
@@ -249,6 +250,7 @@ export function buildMockupPrompt(title) {
 'Be specific and confident - make direct observations, do not hedge. ' +
 'Do NOT mention any product, format, or material (no print, frame, canvas, pillow, etc). ' +
 'MATERIAL RULE: if the artwork DEPICTS a material or texture (fur, woven fabric, knit, wool, velvet, embroidery, quilting, wood grain, leather, etc.), make unmistakable that it is part of the printed artwork, not the product: write it as a graphic or printed rendering (for example "a graphic zebra pattern evoking fur" or "a printed rendering of woven texture"). Never use wording that could imply the physical product is made of that material, or is soft, plush, or textured to the touch. This rule applies to the ARTWORK DESCRIPTION, the CONTEXT CLAUSE, and the META DESCRIPTION. ' +
+'DELIVERY RULE: a sentence may DESCRIBE what the artwork depicts (material words are fine there), but must never promise a physical or tactile experience the product delivers. Never write framings like "drawn to natural textures", "embracing natural materials", "celebrates tactile forms", "invites touch", "soft to the touch", the word "tactile", or "brings texture or softness into your room". Never use "tapestry" as a metaphor (such as "a tapestry of colors"). This rule also applies to the ARTWORK DESCRIPTION, the CONTEXT CLAUSE, and the META DESCRIPTION. ' +
 'Do NOT use any form of these words: stunning, beautiful, beauty, beautifully, vibrant, unique, perfect, perfection, perfectly, or gorgeous. Do NOT use em-dashes or en-dashes (the characters — or –); use periods or commas instead. ' +
 'Do NOT use the word "design" - this is original artwork, not a template.\n\n' +
 '2. CONTEXT CLAUSE: One short phrase (under 15 words) naming where this artwork naturally belongs - a room, a mood, a moment. ' +
