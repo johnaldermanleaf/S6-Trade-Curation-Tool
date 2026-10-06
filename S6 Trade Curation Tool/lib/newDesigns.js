@@ -1,3 +1,4 @@
+import { STOP_TERMS } from './stopWords.js';
 /**
  * lib/newDesigns.js — shared server logic for the New Designs enrichment flow.
  *
@@ -332,6 +333,46 @@ export async function fetchImageAsBase64(imageUrl) {
 const BANNED_WORDS = /\b(gorgeous|stunning|beautiful|beauty|beautifully|vibrant|unique|perfect|perfection|perfectly)\b/gi;
 const DESIGNS_WORD = /\bdesigns?\b/gi;
 
+// Stop-word (IP) matcher over Kasey's list — chunked alternation, compiled once.
+// Short ambiguous terms (lv, rey, 1776...) are excluded at generation time in
+// lib/stopWords.js to keep this low-noise.
+let STOP_RES = null;
+function stopWordHits(text) {
+  if (!STOP_RES) {
+    const sorted = [...STOP_TERMS].sort((a, b) => b.length - a.length);
+    STOP_RES = [];
+    for (let i = 0; i < sorted.length; i += 250) {
+      const alt = sorted.slice(i, i + 250).map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+      STOP_RES.push(new RegExp('(?<![A-Za-z0-9])(' + alt + ')(?![A-Za-z0-9])', 'gi'));
+    }
+  }
+  const hits = new Set();
+  for (const re of STOP_RES) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      hits.add(m[1].toLowerCase());
+      if (m.index === re.lastIndex) re.lastIndex++;
+    }
+  }
+  return [...hits];
+}
+
+// Delivery-language patterns (Jordan's DESCRIBING-vs-DELIVERING test), the same
+// set proven out in scan-delivery.mjs. Not applied to format sentences, which
+// legitimately describe the real product's materials.
+const DELIVERY_PATTERNS = [
+  [/drawn to [^.,;]{0,40}\b(textures?|materials?|fibers?)\b/i, 'delivery framing: "drawn to ... textures/materials"'],
+  [/embrac\w+ [^.,;]{0,40}\b(natural|organic|textures?|materials?)\b/i, 'delivery framing: "embracing ... materials"'],
+  [/\b(natural|organic|raw) (textures?|materials?|fibers?)\b/i, 'delivery framing: "natural/organic materials"'],
+  [/invit\w+ [^.,;]{0,40}\b(touch|tactile)\b/i, 'delivery framing: "invites touch"'],
+  [/\btactile\b/i, 'delivery framing: "tactile"'],
+  [/\b(soft|plush|cozy|warm) to the touch\b/i, 'delivery framing: "to the touch"'],
+  [/brings? [^.,;]{0,50}\b(textures?|softness|plushness)\b/i, 'delivery framing: "brings texture/softness"'],
+  [/\btextured (feel|finish|surface|warmth|comfort)\b/i, 'delivery framing: "textured feel"'],
+  [/\ba tapestry of\b/i, '"tapestry" used as a metaphor'],
+];
+
 export function lintCopy(text, { isFormatSentence = false } = {}) {
   const warnings = [];
   if (!text || !text.trim()) return warnings;
@@ -343,6 +384,13 @@ export function lintCopy(text, { isFormatSentence = false } = {}) {
   if (/shop now/i.test(text)) warnings.push('contains "Shop now"');
   if (isFormatSentence && /^made to order/i.test(text.trim())) {
     warnings.push('opens with "Made to order" (vary the opener)');
+  }
+  if (!isFormatSentence) {
+    for (const [re, label] of DELIVERY_PATTERNS) {
+      if (re.test(text)) warnings.push(label);
+    }
+    const stops = stopWordHits(text);
+    if (stops.length) warnings.push('stop-word/IP term: ' + stops.join(', '));
   }
   return warnings;
 }
