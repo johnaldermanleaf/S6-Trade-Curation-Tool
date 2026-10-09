@@ -5,23 +5,34 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 26;
 
 const { Pool } = pg;
-const ARRAY_SEP = '|';
-const BATCH = 5000; // rows per DB round-trip; streamed out as they arrive
+const BATCH = 5000;
+
+// Export shape. Description fields (artwork/context/meta) are what the
+// product and data teams need; the vision_* tag fields are kept where the
+// pipeline still populates them. vision_summary is not exported: the current
+// prompt (desc-v3) never fills it.
 const COLUMNS = [
+  'design_key',
+  's6_product_id',
   'title',
+  'artist_name',
+  'product_type',
+  'category',
   'product_url',
-  'product_handle',
-  'source_collection',
   'image_url',
-  'image_alt',
-  'visionSummary',
-  'visionSubject',
-  'visionStyle',
-  'visionPalette',
-  'visionMood',
-  'visionKeywords',
-  'visionAt',
-  'visionError',
+  'description_status',
+  'artwork_description',
+  'context_clause',
+  'meta_description',
+  'vision_subject',
+  'vision_style',
+  'vision_palette',
+  'vision_mood',
+  'vision_keywords',
+  'prompt_version',
+  'model_id',
+  'described_at',
+  'description_error',
 ];
 
 let _pool = null;
@@ -37,126 +48,102 @@ function getPool() {
   return _pool;
 }
 
-async function viewExists(pool, name) {
-  const { rows } = await pool.query(
-    `SELECT 1 FROM information_schema.views
-     WHERE table_schema = 'public' AND table_name = $1`,
-    [name]
-  );
-  return rows.length > 0;
-}
-
-// Shared SELECT that works whether we're querying the view or the raw tables.
-// Batched with LIMIT/OFFSET so the whole catalog never sits in memory at once
-// — the previous buffered version exceeded the serverless response limits as
-// the catalog grew and downloads died with "Site wasn't available".
-function buildSql(useView, onlyEnriched) {
-  if (useView) {
-    return `
-      SELECT
-        title,
-        product_url,
-        s6_product_id       AS product_handle,
-        ''                  AS source_collection,
-        image_url,
-        ''                  AS image_alt,
-        vision_summary      AS "visionSummary",
-        vision_subject      AS "visionSubject",
-        vision_style        AS "visionStyle",
-        vision_palette      AS "visionPalette",
-        vision_mood         AS "visionMood",
-        vision_keywords     AS "visionKeywords",
-        vision_at           AS "visionAt",
-        vision_error        AS "visionError"
-      FROM enriched_products
-      ${onlyEnriched ? "WHERE vision_summary IS NOT NULL AND vision_summary != ''" : ''}
-      ORDER BY id
-      LIMIT $1 OFFSET $2
-    `;
-  }
+// Raw tables only. The enriched_products view is NOT used: it predates the
+// description pipeline and lacks columns this export needs.
+// Keyset pagination on p.id (uuid) so each batch is a cheap indexed seek.
+function buildSql(onlyEnriched, afterId) {
   const join = onlyEnriched ? 'INNER' : 'LEFT';
+  const where = [];
+  if (afterId) where.push(`p.id > $2`);
+  if (onlyEnriched) where.push(`r.artwork_description IS NOT NULL AND r.artwork_description <> ''`);
   return `
     SELECT
+      p.id,
+      p.design_key,
+      p.s6_product_id,
       p.title,
+      p.artist_name,
+      p.product_type,
+      p.category::text          AS category,
       p.product_url,
-      p.s6_product_id       AS product_handle,
-      ''                    AS source_collection,
       p.image_url,
-      ''                    AS image_alt,
-      r.vision_summary      AS "visionSummary",
-      r.vision_subject      AS "visionSubject",
-      r.vision_style        AS "visionStyle",
-      r.vision_palette      AS "visionPalette",
-      r.vision_mood         AS "visionMood",
-      r.vision_keywords     AS "visionKeywords",
-      r.created_at          AS "visionAt",
-      p.enrichment_error    AS "visionError"
+      p.description_status::text AS description_status,
+      r.artwork_description,
+      r.context_clause,
+      r.meta_description,
+      r.vision_subject,
+      r.vision_style,
+      r.vision_palette,
+      r.vision_mood,
+      r.vision_keywords,
+      r.prompt_version,
+      r.model_id,
+      r.created_at              AS described_at,
+      p.description_error
     FROM products p
     ${join} JOIN enrichment_results r
       ON r.product_id = p.id AND r.is_current = true
+    ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
     ORDER BY p.id
-    LIMIT $1 OFFSET $2
+    LIMIT $1
   `;
 }
 
 function normalize(r) {
+  const { id, ...rest } = r;
   return {
-    ...r,
-    visionAt: r.visionAt instanceof Date ? r.visionAt.toISOString() : (r.visionAt || ''),
+    ...rest,
+    described_at: r.described_at instanceof Date ? r.described_at.toISOString() : (r.described_at || ''),
   };
 }
 
-async function* recordBatches(onlyEnriched) {
-  const pool = getPool();
-  const useView = await viewExists(pool, 'enriched_products');
-  const sql = buildSql(useView, onlyEnriched);
-  for (let offset = 0; ; offset += BATCH) {
-    const { rows } = await pool.query(sql, [BATCH, offset]);
-    if (rows.length === 0) return;
-    yield rows.map(normalize);
-    if (rows.length < BATCH) return;
-  }
+async function fetchBatch(pool, onlyEnriched, afterId) {
+  const params = afterId ? [BATCH, afterId] : [BATCH];
+  const { rows } = await pool.query(buildSql(onlyEnriched, afterId), params);
+  return rows;
 }
 
-// ——— GET: download enriched catalog (streamed) ————————————————————————————
-// Query params:
-//   ?format=csv (default) — listing_records.csv-shape with vision columns
-//                            appended. Pipe-delimited inside array cells.
-//   ?format=json          — raw records array, vision fields as arrays.
-//   ?onlyEnriched=true    — restrict to records that have vision data.
+// GET ?format=csv|json  &onlyEnriched=true
 export async function GET(request) {
   try {
     const url = new URL(request.url);
     const format = (url.searchParams.get('format') || 'csv').toLowerCase();
     const onlyEnriched = url.searchParams.get('onlyEnriched') === 'true';
+    const isJson = format === 'json';
 
     const dateStamp = new Date().toISOString().slice(0, 10);
     const filenameBase = onlyEnriched
       ? `s6-catalog-enriched-${dateStamp}`
       : `s6-catalog-full-${dateStamp}`;
 
-    const encoder = new TextEncoder();
-    const isJson = format === 'json';
+    // Run the FIRST query before any bytes go out. A schema or connection
+    // problem now returns a real 500 instead of a header-only file.
+    const pool = getPool();
+    let batch = await fetchBatch(pool, onlyEnriched, null);
 
+    const encoder = new TextEncoder();
     const stream = new ReadableStream({
       async start(controller) {
         try {
-          if (isJson) {
-            controller.enqueue(encoder.encode('['));
-            let first = true;
-            for await (const batch of recordBatches(onlyEnriched)) {
-              const chunk = batch.map(r => JSON.stringify(r)).join(',\n');
+          if (isJson) controller.enqueue(encoder.encode('['));
+          else controller.enqueue(encoder.encode('\uFEFF' + COLUMNS.join(',') + '\n'));
+
+          let first = true;
+          while (batch.length > 0) {
+            const lastId = batch[batch.length - 1].id;
+            const recs = batch.map(normalize);
+            if (isJson) {
+              const chunk = recs.map(r => JSON.stringify(r)).join(',\n');
               controller.enqueue(encoder.encode((first ? '\n' : ',\n') + chunk));
               first = false;
+            } else {
+              controller.enqueue(encoder.encode(batchToCsv(recs)));
             }
-            controller.enqueue(encoder.encode('\n]\n'));
-          } else {
-            // UTF-8 BOM so Excel opens it cleanly, then the header row.
-            controller.enqueue(encoder.encode('﻿' + COLUMNS.join(',') + '\n'));
-            for await (const batch of recordBatches(onlyEnriched)) {
-              controller.enqueue(encoder.encode(batchToCsv(batch)));
-            }
+            if (batch.length < BATCH) break;
+            batch = await fetchBatch(pool, onlyEnriched, lastId);
           }
+
+          if (isJson) controller.enqueue(encoder.encode('\n]\n'));
           controller.close();
         } catch (err) {
           console.error('Export stream error:', err);
@@ -185,7 +172,7 @@ function batchToCsv(records) {
     const row = COLUMNS.map(col => {
       const v = r[col];
       if (v === undefined || v === null) return '';
-      if (Array.isArray(v)) return csvEscape(v.join(ARRAY_SEP));
+      if (Array.isArray(v)) return csvEscape(v.join('|'));
       return csvEscape(String(v));
     });
     lines.push(row.join(','));
@@ -194,8 +181,6 @@ function batchToCsv(records) {
 }
 
 function csvEscape(s) {
-  if (/[",\n\r]/.test(s)) {
-    return `"${s.replace(/"/g, '""')}"`;
-  }
+  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
   return s;
 }
