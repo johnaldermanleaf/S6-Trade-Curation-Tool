@@ -25,6 +25,7 @@
  */
 import pg from 'pg';
 import sharp from 'sharp';
+import { pathToFileURL } from 'url';
 
 const args = process.argv.slice(2);
 const flag = n => args.includes(n);
@@ -171,4 +172,4 @@ async function main() {
 }
 
 // Run main() only when executed directly (lets tests import measure()).
-if (import.meta.url === `file://${process.argv[1]}`) main().catch(e => { console.error(e); process.exit(1); });
+if (import.meta.url === pathToFileURL(process.argv[1]).href) main().catch(e => { console.error(e); process.exit(1); });
