@@ -306,7 +306,7 @@ function applyFeedbackToBrief(brief, hints) {
 }
 
 // ——— Stage: weighted scoring in Postgres ——————————————————————————————————
-async function scorePool(brief, excludeMini, prevTitles = [], productTypes = []) {
+async function scorePool(brief, excludeMini, prevTitles = [], productTypes = [], orientation = '') {
   const hard = splitAvoid(lc(brief.avoidHard));
   const params = [
     lc(brief.styleTags), lc(brief.paletteTags), lc(brief.moodTags), lc(brief.keywords),
@@ -314,6 +314,7 @@ async function scorePool(brief, excludeMini, prevTitles = [], productTypes = [])
     hard.colorSubstrings, hard.nonColors,
     (prevTitles || []).map(t => (t || '').toLowerCase().trim()).filter(Boolean),
     (productTypes || []).filter(Boolean),
+    orientation || '',
   ];
   const sql = `
   WITH base AS (
@@ -334,6 +335,11 @@ async function scorePool(brief, excludeMini, prevTitles = [], productTypes = [])
       AND ($12::text[] = '{}' OR EXISTS (
             SELECT 1 FROM design_formats df
             WHERE df.design_key = p.design_key AND df.product_type = ANY($12::text[])))
+      -- Optional orientation filter (design_orientation, filled by
+      -- scripts/backfill-orientation.mjs). Unmeasured designs drop out when set.
+      AND ($13::text = '' OR EXISTS (
+            SELECT 1 FROM design_orientation o
+            WHERE o.design_key = p.design_key AND o.orientation = $13::text))
   ),
   filtered AS (
     SELECT * FROM base
@@ -540,6 +546,7 @@ export async function POST(request) {
     let refineFeedback = '', prevItemTitles = [];
     let findSimilarUrls = [];
     let productTypes = [];
+    let orientation = '';
 
     const contentType = request.headers.get('content-type') || '';
     if (contentType.includes('multipart/form-data')) {
@@ -552,6 +559,7 @@ export async function POST(request) {
       try { prevItemTitles = JSON.parse(fd.get('prevItemTitles') || '[]'); } catch {}
       try { findSimilarUrls = JSON.parse(fd.get('findSimilarUrls') || '[]'); } catch {}
       try { productTypes = JSON.parse(fd.get('productTypes') || '[]'); } catch {}
+      orientation = fd.get('orientation') || '';
       const em = fd.get('excludeMini');
       if (em !== null && em !== undefined && em !== '') excludeMini = (em === 'true' || em === true);
     } else {
@@ -563,9 +571,11 @@ export async function POST(request) {
       prevItemTitles = body.prevItemTitles || [];
       findSimilarUrls = body.findSimilarUrls || [];
       productTypes = body.productTypes || [];
+      orientation = body.orientation || '';
       if (typeof body.excludeMini === 'boolean') excludeMini = body.excludeMini;
     }
     productTypes = (Array.isArray(productTypes) ? productTypes : []).map(t => (t || '').trim()).filter(Boolean);
+    orientation = ['vertical', 'horizontal', 'square'].includes(orientation) ? orientation : '';
 
     // Normalize findSimilarUrls: accept array or newline string
     if (typeof findSimilarUrls === 'string') findSimilarUrls = findSimilarUrls.split('\n');
@@ -624,7 +634,7 @@ export async function POST(request) {
     }
 
     // —— Score (excluding previously-shown titles on a refine) ——
-    const candidates = (await scorePool(brief, excludeMini, prevItemTitles, productTypes)).map(toCard);
+    const candidates = (await scorePool(brief, excludeMini, prevItemTitles, productTypes, orientation)).map(toCard);
     const totalScored = candidates.length;
 
     if (candidates.length === 0) {
@@ -632,7 +642,10 @@ export async function POST(request) {
         brief, primary: [], accent: [], galleryWallSets: [],
         totalScored: 0, catalogSize: 64281, filteredSize: 0, moodboard,
         aiPowered: hasKey,
-        note: 'No designs scored above zero for this brief. Try loosening color or subject constraints.',
+        orientation,
+        note: orientation
+          ? `No ${orientation} designs scored above zero for this brief. Try "Any" orientation or loosen color/subject constraints.`
+          : 'No designs scored above zero for this brief. Try loosening color or subject constraints.',
       });
     }
 
@@ -683,7 +696,7 @@ export async function POST(request) {
       accent: accent.slice(0, 15),
       galleryWallSets,
       totalScored, catalogSize: 64281, filteredSize: totalScored,
-      moodboard, pinnedUnmatched, excludeMini,
+      moodboard, pinnedUnmatched, excludeMini, orientation,
       findSimilar: { seedCount: seedResult.seeds.length, unmatched: seedResult.unmatched },
       feedbackApplied: feedbackHints ? refineFeedback : null,
       aiPowered: hasKey,

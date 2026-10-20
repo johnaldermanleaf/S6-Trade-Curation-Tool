@@ -247,6 +247,9 @@ export default function HomePage() {
   // preserving the old "exclude mini" behavior.
   const [selectedTypes, setSelectedTypes] = useState(() => new Set(DEFAULT_TYPE_SLUGS))
   const excludeMini = !selectedTypes.has('mini-art-print')
+  // Wall-art orientation filter: '' = any, 'vertical', 'horizontal'.
+  // Pinned / Find Similar pieces are never filtered out.
+  const [orientation, setOrientation] = useState('')
   // Native product_type values to filter the recommendation pool by.
   const selectedProductTypes = ALL_PRODUCT_TYPES.filter(t => selectedTypes.has(t.slug)).map(t => t.type)
 
@@ -313,7 +316,7 @@ export default function HomePage() {
   const [deckTargetPieces, setDeckTargetPieces] = useState('')
   const [deckNotes, setDeckNotes] = useState('')
 
-  async function callRecommend({ brief, moodboardUrl, moodboardFile, refineFeedback, prevItemTitles, pinnedUrls, excludeMini, findSimilarUrls, productTypes }) {
+  async function callRecommend({ brief, moodboardUrl, moodboardFile, refineFeedback, prevItemTitles, pinnedUrls, excludeMini, findSimilarUrls, productTypes, orientation }) {
     let options
     if (moodboardFile) {
       const fd = new FormData()
@@ -326,12 +329,13 @@ export default function HomePage() {
       if (findSimilarUrls?.length) fd.append('findSimilarUrls', JSON.stringify(findSimilarUrls))
       if (productTypes?.length) fd.append('productTypes', JSON.stringify(productTypes))
       fd.append('excludeMini', String(excludeMini))
+      if (orientation) fd.append('orientation', orientation)
       options = { method: 'POST', body: fd }
     } else {
       options = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ brief, moodboardUrl, refineFeedback, prevItemTitles, pinnedUrls, excludeMini, findSimilarUrls, productTypes }),
+        body: JSON.stringify({ brief, moodboardUrl, refineFeedback, prevItemTitles, pinnedUrls, excludeMini, findSimilarUrls, productTypes, orientation }),
       }
     }
     // A cold-started serverless function can exceed Netlify's ~10s limit and return
@@ -377,7 +381,7 @@ export default function HomePage() {
     setRefineHistory([])
     try {
       const findSimilarUrls = findSimilarText.split('\n').map(s => s.trim()).filter(Boolean).slice(0, 7)
-      const data = await callRecommend({ brief: briefText, moodboardUrl, moodboardFile, pinnedUrls, excludeMini, findSimilarUrls, productTypes: selectedProductTypes })
+      const data = await callRecommend({ brief: briefText, moodboardUrl, moodboardFile, pinnedUrls, excludeMini, findSimilarUrls, productTypes: selectedProductTypes, orientation })
       setResults(data)
       if (data.brief?.clientName) setDeckClientName(data.brief.clientName)
       if (data.brief?.projectName) setDeckProjectName(data.brief.projectName)
@@ -418,7 +422,7 @@ export default function HomePage() {
       const data = await callRecommend({
         brief: briefText, moodboardUrl, moodboardFile, refineFeedback,
         prevItemTitles, pinnedUrls: mergedPinnedUrls, excludeMini, findSimilarUrls,
-        productTypes: selectedProductTypes,
+        productTypes: selectedProductTypes, orientation,
       })
       setRefineHistory(h => [...h, refineFeedback])
       setRefineFeedback('')
@@ -790,6 +794,22 @@ export default function HomePage() {
             {selectedTypes.size === 0 && (
               <p className="text-xs text-amber-600 mt-3">Select at least one product type, or results won't have any product links.</p>
             )}
+
+            {/* Wall art orientation */}
+            <div className="mt-4 pt-3 border-t border-gray-200">
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="text-sm font-medium text-gray-700">Orientation</span>
+                <div className="inline-flex rounded-md border border-gray-300 overflow-hidden text-sm">
+                  {[['', 'Any'], ['vertical', 'Vertical'], ['horizontal', 'Horizontal']].map(([val, label]) => (
+                    <button key={label} type="button" onClick={() => setOrientation(val)}
+                      className={`px-3 py-1 ${orientation === val ? 'bg-gray-900 text-white' : 'bg-white text-gray-700 hover:bg-gray-100'} ${val ? 'border-l border-gray-300' : ''}`}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <p className="text-xs text-gray-500 mt-1.5">Limits results to vertical or horizontal artwork (square pieces are left out when either is chosen). Pinned and Find Similar pieces always show.</p>
+            </div>
           </div>
 
           {error && (
@@ -804,6 +824,7 @@ export default function HomePage() {
               <span className="text-sm text-gray-500">
                 {results.totalScored} designs scored · catalog of {results.catalogSize?.toLocaleString?.() || results.catalogSize}
                 {results.excludeMini && <span className="text-gray-400"> · mini prints excluded</span>}
+                {results.orientation && <span className="text-gray-400"> · {results.orientation} only</span>}
               </span>
             )}
           </div>
